@@ -1,0 +1,9 @@
+{
+  "latest_plan_path": null,
+  "latest_plan_id": null,
+  "current_run_id": null,
+  "current_run_status": null,
+  "current_phase": "setup",
+  "last_completed_task": "SETUP-01",
+  "last_updated": "2026-03-31"
+}

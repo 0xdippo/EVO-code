@@ -1,0 +1,44 @@
+{
+  "project_name": "HARNESS",
+  "description": "Desktop orchestration workspace for coding projects. Plan-first, one active run per project, repo-local source of truth.",
+  "project_type": "desktop-app",
+  "phase": "setup",
+  "stack": {
+    "frontend": "Tauri + React + Vite + TypeScript",
+    "orchestrator": "Node.js + TypeScript",
+    "state": "JSON files (ops/)",
+    "ipc": "Tauri commands + events"
+  },
+  "models": {
+    "planning": "claude",
+    "implementation": "codex",
+    "review": "claude",
+    "research": "claude"
+  },
+  "routing": {
+    "default_implementation": "codex",
+    "allow_manual_override": true
+  },
+  "tools": {
+    "terminal": true,
+    "browser": true,
+    "package_install": true,
+    "file_delete": false,
+    "network_access": true,
+    "deploy_commands": false
+  },
+  "workflow": {
+    "plan_first": true,
+    "review_required": true,
+    "checklists_required": true,
+    "max_review_loops": 3,
+    "one_active_run_per_project": true
+  },
+  "instruction_files": [
+    "PROJECT.md",
+    "AGENTS.md",
+    "TOOLS.md",
+    "CHECKLISTS.md",
+    "TASKS.md"
+  ]
+}
