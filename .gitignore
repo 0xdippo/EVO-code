@@ -1,3 +1,19 @@
 /dist
 /node_modules
 /src-tauri/target
+
+# macOS
+**/.DS_Store
+.sync-conflict-*
+
+# Local dev config
+.claude/
+
+# Private notes
+ROADMAP.md
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem

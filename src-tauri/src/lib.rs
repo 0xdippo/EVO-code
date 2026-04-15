@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -127,6 +127,18 @@ struct GitCommandResult {
     stderr: String,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentConfig {
+    id: String,
+    name: Option<String>,
+    provider: String,
+    model: String,
+    effort: String,
+    extended_thinking: Option<bool>,
+    permission_mode: Option<String>,
+}
+
 #[derive(Default, Deserialize, Serialize)]
 struct ProjectConfig {
     project_name: Option<String>,
@@ -135,6 +147,8 @@ struct ProjectConfig {
     phase: Option<String>,
     stack: Option<Value>,
     models: Option<ProjectModels>,
+    execution: Option<ProjectExecution>,
+    agents: Option<Vec<AgentConfig>>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -155,6 +169,15 @@ struct ProjectModels {
     implementation: Option<String>,
     review: Option<String>,
     research: Option<String>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct ProjectExecution {
+    permission_mode: Option<String>,
+    claude_enabled: Option<bool>,
+    codex_enabled: Option<bool>,
+    claude_permission_mode: Option<String>,
+    codex_permission_mode: Option<String>,
 }
 
 struct RunManager {
@@ -183,6 +206,47 @@ struct RunStatusEvent {
     root_path: String,
     run_id: String,
     status: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatStreamEvent {
+    root_path: String,
+    message_id: String,
+    provider: String,
+    stream: String,
+    chunk: String,
+    done: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatToolEvent {
+    root_path: String,
+    message_id: String,
+    tool_id: String,
+    tool_name: String,
+    input: Value,
+    result: Option<String>,
+    is_error: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatMessage {
+    id: String,
+    role: String,
+    provider: String,
+    content: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatThread {
+    root_path: String,
+    path: String,
+    messages: Vec<ChatMessage>,
 }
 
 #[derive(Serialize)]
@@ -282,26 +346,24 @@ struct SetupProjectInput {
     project_type: String,
     phase: String,
     stack: String,
-    planning_model: ProviderModel,
-    implementation_model: ProviderModel,
+    agents: Vec<AgentConfig>,
     last_updated: String,
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ProviderModel {
-    Claude,
-    Codex,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendChatMessageInput {
+    root_path: String,
+    provider: String,
+    model: String,
+    effort: String,
+    #[allow(dead_code)]
+    extended_thinking: Option<bool>,
+    agent_name: Option<String>,
+    permission_mode: String,
+    content: String,
 }
 
-impl ProviderModel {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        }
-    }
-}
 
 fn validate_tracked_path(file_path: &str) -> Result<(), String> {
     if !TRACKED_FILES.contains(&file_path) {
@@ -1071,6 +1133,21 @@ fn implementation_provider(project_config: Option<&ProjectConfig>) -> String {
         .unwrap_or_else(|| "codex".into())
 }
 
+fn provider_permission_mode(project_config: Option<&ProjectConfig>, provider: &str) -> String {
+    let execution = project_config.and_then(|config| config.execution.as_ref());
+    let provider_specific = match provider {
+        "claude" => execution.and_then(|entry| entry.claude_permission_mode.as_ref()),
+        "codex" => execution.and_then(|entry| entry.codex_permission_mode.as_ref()),
+        _ => None,
+    };
+
+    provider_specific
+        .or_else(|| execution.and_then(|entry| entry.permission_mode.as_ref()))
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| matches!(value.as_str(), "normal" | "yolo"))
+        .unwrap_or_else(|| "normal".into())
+}
+
 fn run_record_from_state(
     root: &Path,
     project_config: Option<&ProjectConfig>,
@@ -1162,26 +1239,90 @@ fn merge_setup_input(
         }
     }
 
-    let models_entry = project
-        .entry("models".into())
-        .or_insert_with(|| Value::Object(Map::new()));
-
-    if !models_entry.is_object() {
-        *models_entry = Value::Object(Map::new());
-    }
-
-    if let Value::Object(models) = models_entry {
-        models.insert(
-            "planning".into(),
-            Value::String(input.planning_model.as_str().into()),
-        );
-        models.insert(
-            "implementation".into(),
-            Value::String(input.implementation_model.as_str().into()),
-        );
-    }
+    let agents_value = serde_json::to_value(&input.agents).unwrap_or(Value::Array(vec![]));
+    project.insert("agents".into(), agents_value);
 
     project
+}
+
+fn chat_thread_relative_path() -> &'static str {
+    "ops/chat/thread.json"
+}
+
+fn ensure_chat_directory(root: &Path) -> Result<(), String> {
+    fs::create_dir_all(root.join("ops/chat"))
+        .map_err(|error| format!("Failed to create ops/chat directory: {error}"))
+}
+
+fn read_chat_messages(root: &Path) -> Result<Vec<ChatMessage>, String> {
+    ensure_chat_directory(root)?;
+    let thread_path = root.join(chat_thread_relative_path());
+    let Some(content) = read_text_file(&thread_path)? else {
+        return Ok(Vec::new());
+    };
+
+    serde_json::from_str::<Vec<ChatMessage>>(&content)
+        .map_err(|error| format!("Failed to parse {}: {error}", thread_path.display()))
+}
+
+fn write_chat_messages(root: &Path, messages: &[ChatMessage]) -> Result<(), String> {
+    ensure_chat_directory(root)?;
+    let thread_path = root.join(chat_thread_relative_path());
+    let content = serde_json::to_string_pretty(messages)
+        .map_err(|error| format!("Failed to serialize chat thread: {error}"))?;
+
+    fs::write(&thread_path, content)
+        .map_err(|error| format!("Failed to write {}: {error}", thread_path.display()))
+}
+
+fn build_chat_prompt(messages: &[ChatMessage], provider: &str, root: &Path) -> String {
+    let transcript = messages
+        .iter()
+        .rev()
+        .take(50)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| {
+            if message.role == "user" {
+                format!("User -> {}: {}", message.provider, message.content)
+            } else {
+                format!("{}: {}", message.provider, message.content)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let project_section = read_text_file(&root.join("PROJECT.md"))
+        .ok()
+        .flatten()
+        .map(|content| format!("\n--- PROJECT ---\n{content}\n"))
+        .unwrap_or_default();
+
+    let agents_section = read_text_file(&root.join("AGENTS.md"))
+        .ok()
+        .flatten()
+        .map(|content| format!("\n--- AGENT INSTRUCTIONS ---\n{content}\n"))
+        .unwrap_or_default();
+
+    format!(
+        "You are participating in a shared engineering group chat.\n\
+Answer as {provider}.\n\
+Keep responses concise and practical.\
+{project_section}\
+{agents_section}\n\
+--- CONVERSATION ---\n\
+{transcript}\n\n\
+Respond to the latest user message."
+    )
+}
+
+fn now_timestamp() -> String {
+    Local::now().to_rfc3339()
+}
+
+fn next_message_id(messages: &[ChatMessage]) -> String {
+    format!("m-{}-{}", Local::now().timestamp_millis(), messages.len() + 1)
 }
 
 fn build_snapshot(root_path: &str) -> Result<RepoSnapshot, String> {
@@ -1291,15 +1432,22 @@ fn spawn_provider(
     provider: &str,
     root: &Path,
     prompt: &str,
+    model: &str,
+    effort: &str,
+    permission_mode: &str,
 ) -> Result<Command, String> {
+    let yolo_mode = permission_mode == "yolo";
     let mut command = match provider {
         "claude" => {
             let mut command = Command::new("claude");
-            command
-                .arg("--print")
-                .arg("--permission-mode")
-                .arg("bypassPermissions")
-                .arg(prompt);
+            command.arg("--print").arg("--verbose").arg("--output-format").arg("stream-json");
+            if !model.is_empty() {
+                command.arg("--model").arg(model);
+            }
+            if yolo_mode {
+                command.arg("--permission-mode").arg("bypassPermissions");
+            }
+            command.arg(prompt);
             command
         }
         "codex" => {
@@ -1308,9 +1456,17 @@ fn spawn_provider(
                 .arg("exec")
                 .arg("--cd")
                 .arg(root)
-                .arg("--skip-git-repo-check")
-                .arg("--dangerously-bypass-approvals-and-sandbox")
-                .arg(prompt);
+                .arg("--skip-git-repo-check");
+            if !model.is_empty() {
+                command.arg("--model").arg(model);
+            }
+            if !effort.is_empty() && effort != "medium" {
+                command.arg("--effort").arg(effort);
+            }
+            if yolo_mode {
+                command.arg("--dangerously-bypass-approvals-and-sandbox");
+            }
+            command.arg(prompt);
             command
         }
         unsupported => {
@@ -1318,7 +1474,6 @@ fn spawn_provider(
         }
     };
 
-    // TODO: keep evolving exact CLI flags here as provider CLIs stabilize; callers should stay unchanged.
     command.current_dir(root).stdout(Stdio::piped()).stderr(Stdio::piped());
     Ok(command)
 }
@@ -1330,6 +1485,155 @@ fn emit_run_status(app: &AppHandle, root_path: &str, run_id: &str, status: &str)
             root_path: root_path.into(),
             run_id: run_id.into(),
             status: status.into(),
+        },
+    );
+}
+
+fn stream_claude_json(
+    app: &AppHandle,
+    root_path: &str,
+    message_id: &str,
+    display_name: &str,
+    stdout: impl Read,
+) -> String {
+    use std::collections::HashMap;
+    let reader = BufReader::new(stdout);
+    let mut result_text = String::new();
+    // pending: tool_id -> (tool_name, input) waiting for their result
+    let mut pending: HashMap<String, (String, Value)> = HashMap::new();
+
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+
+        match event.get("type").and_then(Value::as_str).unwrap_or("") {
+            "assistant" => {
+                let Some(blocks) = event["message"]["content"].as_array() else {
+                    continue;
+                };
+                for block in blocks {
+                    match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                        "text" => {
+                            if let Some(text) = block.get("text").and_then(Value::as_str) {
+                                if !text.is_empty() {
+                                    emit_chat_stream(app, root_path, message_id, display_name, "stdout", text, false);
+                                    result_text.push_str(text);
+                                }
+                            }
+                        }
+                        "tool_use" => {
+                            let tool_id = block
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            let tool_name = block
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            let input = block
+                                .get("input")
+                                .cloned()
+                                .unwrap_or_else(|| Value::Object(Default::default()));
+                            pending.insert(tool_id.clone(), (tool_name.clone(), input.clone()));
+                            let _ = app.emit(
+                                "chat-tool",
+                                ChatToolEvent {
+                                    root_path: root_path.into(),
+                                    message_id: message_id.into(),
+                                    tool_id,
+                                    tool_name,
+                                    input,
+                                    result: None,
+                                    is_error: false,
+                                },
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "user" => {
+                let Some(blocks) = event["message"]["content"].as_array() else {
+                    continue;
+                };
+                for block in blocks {
+                    if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                        continue;
+                    }
+                    let tool_id = block
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let is_error = block
+                        .get("is_error")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let result_str = match block.get("content") {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(Value::Array(arr)) => arr
+                            .iter()
+                            .filter_map(|item| item.get("text").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        _ => String::new(),
+                    };
+                    if let Some((tool_name, input)) = pending.get(&tool_id) {
+                        let _ = app.emit(
+                            "chat-tool",
+                            ChatToolEvent {
+                                root_path: root_path.into(),
+                                message_id: message_id.into(),
+                                tool_id,
+                                tool_name: tool_name.clone(),
+                                input: input.clone(),
+                                result: Some(result_str),
+                                is_error,
+                            },
+                        );
+                    }
+                }
+            }
+            "result" => {
+                if let Some(text) = event.get("result").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        result_text = text.to_string();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    result_text
+}
+
+fn emit_chat_stream(
+    app: &AppHandle,
+    root_path: &str,
+    message_id: &str,
+    provider: &str,
+    stream: &str,
+    chunk: &str,
+    done: bool,
+) {
+    let _ = app.emit(
+        "chat-stream",
+        ChatStreamEvent {
+            root_path: root_path.into(),
+            message_id: message_id.into(),
+            provider: provider.into(),
+            stream: stream.into(),
+            chunk: chunk.into(),
+            done,
         },
     );
 }
@@ -1433,6 +1737,14 @@ fn finalize_run(
 }
 
 #[tauri::command]
+fn cancel_chat_message(state: State<ChatProcessState>) -> Result<(), String> {
+    if let Some(mut child) = state.child.lock().unwrap().take() {
+        child.kill().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn open_repository(root_path: String) -> Result<RepoSnapshot, String> {
     build_snapshot(&root_path)
 }
@@ -1440,6 +1752,218 @@ fn open_repository(root_path: String) -> Result<RepoSnapshot, String> {
 #[tauri::command]
 fn run_doctor_checks(root_path: String) -> Result<DoctorReport, String> {
     run_doctor_report(&root_path)
+}
+
+#[tauri::command]
+fn load_chat_thread(root_path: String) -> Result<ChatThread, String> {
+    let root = PathBuf::from(&root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+
+    let messages = read_chat_messages(&root)?;
+
+    Ok(ChatThread {
+        root_path,
+        path: chat_thread_relative_path().into(),
+        messages,
+    })
+}
+
+fn send_chat_message_impl(app: AppHandle, input: SendChatMessageInput) -> Result<ChatThread, String> {
+    let root = PathBuf::from(&input.root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+
+    let provider = input.provider.trim().to_lowercase();
+    if !matches!(provider.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported provider: {}", input.provider));
+    }
+
+    let content = input.content.trim();
+    if content.is_empty() {
+        return Err("Message content is required.".into());
+    }
+
+    let display_name = input.agent_name
+        .as_deref()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or(&provider)
+        .to_string();
+
+    let mut messages = read_chat_messages(&root)?;
+
+    messages.push(ChatMessage {
+        id: next_message_id(&messages),
+        role: "user".into(),
+        provider: display_name.clone(),
+        content: content.into(),
+        created_at: now_timestamp(),
+    });
+
+    let assistant_message_id = next_message_id(&messages);
+    let model = input.model.trim();
+    let effort = input.effort.trim();
+    let permission_mode = input.permission_mode.trim().to_lowercase();
+    let permission_mode = if matches!(permission_mode.as_str(), "normal" | "yolo") {
+        permission_mode
+    } else {
+        "normal".to_string()
+    };
+
+    let prompt = build_chat_prompt(&messages, &display_name, &root);
+    let mut command = spawn_provider(&provider, &root, &prompt, model, effort, &permission_mode)?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Failed to run provider {provider}: {error}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture provider stdout.".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture provider stderr.".to_string())?;
+
+    // Store child so cancel_chat_message can kill it
+    {
+        let state = app.state::<ChatProcessState>();
+        *state.child.lock().unwrap() = Some(child);
+    }
+
+    let root_path_for_stream = input.root_path.clone();
+    let display_name_for_stream = display_name.clone();
+    let assistant_id_for_stream = assistant_message_id.clone();
+    let app_for_stderr = app.clone();
+
+    let stderr_handle = thread::spawn(move || -> String {
+        let mut stderr_output = String::new();
+        let mut buffer = [0u8; 512];
+
+        loop {
+            match stderr.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read_count) => {
+                    let chunk = String::from_utf8_lossy(&buffer[..read_count]).to_string();
+                    stderr_output.push_str(&chunk);
+                    emit_chat_stream(
+                        &app_for_stderr,
+                        &root_path_for_stream,
+                        &assistant_id_for_stream,
+                        &display_name_for_stream,
+                        "stderr",
+                        &chunk,
+                        false,
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+
+        stderr_output
+    });
+
+    let stdout_output = if provider == "claude" {
+        stream_claude_json(&app, &input.root_path, &assistant_message_id, &display_name, stdout)
+    } else {
+        let mut output = String::new();
+        let mut stdout_buffer = [0u8; 512];
+        loop {
+            match stdout.read(&mut stdout_buffer) {
+                Ok(0) => break,
+                Ok(read_count) => {
+                    let chunk = String::from_utf8_lossy(&stdout_buffer[..read_count]).to_string();
+                    output.push_str(&chunk);
+                    emit_chat_stream(
+                        &app,
+                        &input.root_path,
+                        &assistant_message_id,
+                        &display_name,
+                        "stdout",
+                        &chunk,
+                        false,
+                    );
+                }
+                Err(error) => {
+                    return Err(format!("Failed while reading provider output: {error}"));
+                }
+            }
+        }
+        output
+    };
+
+    let mut taken_child = app.state::<ChatProcessState>().child.lock().unwrap().take();
+    let status = match taken_child.as_mut() {
+        Some(c) => c.wait().map_err(|error| format!("Failed waiting for provider {provider}: {error}"))?,
+        None => return Err("Cancelled.".into()),
+    };
+    let stderr_output = stderr_handle
+        .join()
+        .unwrap_or_else(|_| String::new());
+
+    let stdout_trimmed = stdout_output.trim().to_string();
+    let stderr_trimmed = stderr_output.trim().to_string();
+    let assistant_content = if status.success() {
+        if stdout_trimmed.is_empty() {
+            "(No output returned.)".to_string()
+        } else {
+            stdout_trimmed
+        }
+    } else if !stderr_trimmed.is_empty() {
+        format!("Provider error: {stderr_trimmed}")
+    } else if !stdout_trimmed.is_empty() {
+        stdout_trimmed
+    } else {
+        "Provider failed without output.".to_string()
+    };
+
+    messages.push(ChatMessage {
+        id: assistant_message_id.clone(),
+        role: "assistant".into(),
+        provider: display_name.clone(),
+        content: assistant_content,
+        created_at: now_timestamp(),
+    });
+
+    write_chat_messages(&root, &messages)?;
+
+    Ok(ChatThread {
+        root_path: input.root_path,
+        path: chat_thread_relative_path().into(),
+        messages,
+    })
+}
+
+#[tauri::command]
+async fn send_chat_message(app: AppHandle, input: SendChatMessageInput) -> Result<ChatThread, String> {
+    let app_for_worker = app.clone();
+    let root_path = input.root_path.clone();
+    let display_name = input.agent_name
+        .as_deref()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or(input.provider.trim())
+        .to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || send_chat_message_impl(app_for_worker, input))
+        .await
+        .map_err(|error| format!("Failed to join chat worker: {error}"))?;
+
+    if let Ok(thread) = &result {
+        if let Some(last_assistant_message) = thread.messages.iter().rev().find(|message| message.role == "assistant")
+        {
+            emit_chat_stream(
+                &app,
+                &root_path,
+                &last_assistant_message.id,
+                &last_assistant_message.provider,
+                "stdout",
+                "",
+                true,
+            );
+        }
+    } else {
+        emit_chat_stream(&app, &root_path, "", &display_name, "stderr", "", true);
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -1788,7 +2312,8 @@ fn start_run(
 
     manager.ensure_slot_available(&root_path)?;
 
-    let mut command = spawn_provider(&provider, &root, &prompt)?;
+    let permission_mode = provider_permission_mode(Some(&project_config), &provider);
+    let mut command = spawn_provider(&provider, &root, &prompt, "", "medium", &permission_mode)?;
     let mut child = command
         .spawn()
         .map_err(|error| format!("Failed to spawn provider {provider}: {error}"))?;
@@ -1894,6 +2419,10 @@ fn setup_project(root_path: String, input: SetupProjectInput) -> Result<RepoSnap
         return Err("Phase is required.".into());
     }
 
+    if input.agents.is_empty() {
+        return Err("At least one agent is required.".into());
+    }
+
     let last_updated = input.last_updated.trim();
     if last_updated.is_empty() {
         return Err("lastUpdated is required.".into());
@@ -1927,15 +2456,25 @@ fn setup_project(root_path: String, input: SetupProjectInput) -> Result<RepoSnap
     build_snapshot(&root_path)
 }
 
+struct ChatProcessState {
+    child: Mutex<Option<Child>>,
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(RunManager {
             runs: Mutex::new(Vec::new()),
         })
+        .manage(ChatProcessState {
+            child: Mutex::new(None),
+        })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             open_repository,
             run_doctor_checks,
+            load_chat_thread,
+            send_chat_message,
+            cancel_chat_message,
             list_changed_files,
             load_changed_file_diff,
             apply_review_decision,

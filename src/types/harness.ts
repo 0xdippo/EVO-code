@@ -40,6 +40,20 @@ export interface DoctorReport {
   findings: DoctorFinding[];
 }
 
+export type ProviderModel = "claude" | "codex";
+export type PermissionMode = "normal" | "yolo";
+export type AgentEffort = "low" | "medium" | "high";
+
+export interface AgentConfig {
+  id: string;
+  name?: string;
+  provider: ProviderModel;
+  model: string;
+  effort: AgentEffort;
+  extendedThinking?: boolean;
+  permissionMode?: PermissionMode;
+}
+
 export interface ProjectConfig {
   project_name?: string;
   description?: string;
@@ -52,6 +66,14 @@ export interface ProjectConfig {
     review?: ProviderModel;
     research?: ProviderModel;
   };
+  execution?: {
+    permission_mode?: PermissionMode;
+    claude_permission_mode?: PermissionMode;
+    codex_permission_mode?: PermissionMode;
+    claude_enabled?: boolean;
+    codex_enabled?: boolean;
+  };
+  agents?: AgentConfig[];
 }
 
 export interface ProjectState {
@@ -120,6 +142,49 @@ export interface RunStatusEvent {
   status: string;
 }
 
+export type ChatRole = "user" | "assistant";
+
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  provider: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface ChatThread {
+  rootPath: string;
+  path: string;
+  messages: ChatMessage[];
+}
+
+export interface ChatStreamEvent {
+  rootPath: string;
+  messageId: string;
+  provider: string;
+  stream: "stdout" | "stderr";
+  chunk: string;
+  done: boolean;
+}
+
+export interface ToolBlock {
+  toolId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  result: string | null;
+  isError: boolean;
+}
+
+export interface ChatToolEvent {
+  rootPath: string;
+  messageId: string;
+  toolId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  result: string | null;
+  isError: boolean;
+}
+
 export interface RepoSnapshot {
   rootPath: string;
   hasOpsDirectory: boolean;
@@ -132,8 +197,6 @@ export interface RepoSnapshot {
   runRecord: RunRecord | null;
 }
 
-export type ProviderModel = "claude" | "codex";
-
 export type SaveRepositoryFile = (path: TrackedFilePath, content: string) => Promise<void>;
 
 export interface SetupFormValues {
@@ -142,6 +205,5 @@ export interface SetupFormValues {
   projectType: string;
   phase: string;
   stack: string;
-  planningModel: ProviderModel;
-  implementationModel: ProviderModel;
+  agents: AgentConfig[];
 }

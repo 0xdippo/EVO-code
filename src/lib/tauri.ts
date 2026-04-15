@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AgentConfig,
+  ChatStreamEvent,
+  ChatToolEvent,
+  ChatThread,
   ChangedFileDiff,
   ChangedFilesSnapshot,
   ChangedFileType,
@@ -12,6 +16,7 @@ import type {
   SetupFormValues,
   TrackedFilePath,
 } from "../types/harness";
+import { agentDisplayName } from "./setup";
 
 export async function openRepository(rootPath: string): Promise<RepoSnapshot> {
   return invoke<RepoSnapshot>("open_repository", { rootPath });
@@ -83,8 +88,7 @@ export async function setupProject(
       projectType: values.projectType,
       phase: values.phase,
       stack: values.stack,
-      planningModel: values.planningModel,
-      implementationModel: values.implementationModel,
+      agents: values.agents,
       lastUpdated,
     },
   });
@@ -150,4 +154,43 @@ export async function commitAcceptedChanges(
 
 export async function runDoctorChecks(rootPath: string): Promise<DoctorReport> {
   return invoke<DoctorReport>("run_doctor_checks", { rootPath });
+}
+
+export async function loadChatThread(rootPath: string): Promise<ChatThread> {
+  return invoke<ChatThread>("load_chat_thread", { rootPath });
+}
+
+export async function sendChatMessage(
+  rootPath: string,
+  agent: AgentConfig,
+  content: string,
+): Promise<ChatThread> {
+  return invoke<ChatThread>("send_chat_message", {
+    input: {
+      rootPath,
+      provider: agent.provider,
+      model: agent.model,
+      effort: agent.effort,
+      extendedThinking: agent.extendedThinking ?? false,
+      agentName: agentDisplayName(agent),
+      permissionMode: agent.permissionMode ?? "normal",
+      content,
+    },
+  });
+}
+
+export function listenForChatStream(
+  listener: (event: ChatStreamEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<ChatStreamEvent>("chat-stream", (event) => listener(event.payload));
+}
+
+export async function cancelChatMessage(): Promise<void> {
+  return invoke<void>("cancel_chat_message");
+}
+
+export function listenForChatTool(
+  listener: (event: ChatToolEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<ChatToolEvent>("chat-tool", (event) => listener(event.payload));
 }

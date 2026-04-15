@@ -22,64 +22,49 @@ export function RepoRulesPanel({
     setDraft(file?.content ?? "");
   }, [file?.content, selectedPath]);
 
+  const isMissing = !file || file.status === "missing";
+
   return (
-    <section className="rules-layout">
-      <aside className="panel rules-sidebar">
-        <p className="eyebrow">Repo Rules</p>
-        <h2>Source of truth</h2>
-        <ul className="file-nav">
+    <article className="panel file-editor-panel">
+      <div className="file-editor-header">
+        <p className="eyebrow">File Setup</p>
+        <select
+          className="file-select"
+          value={selectedPath}
+          onChange={(e) => setSelectedPath(e.target.value as TrackedFilePath)}
+        >
           {TRACKED_FILES.map((path) => {
             const entry = getFileRecord(snapshot, path);
+            const missing = !entry || entry.status === "missing";
             return (
-              <li key={path}>
-                <button
-                  className={path === selectedPath ? "file-link active" : "file-link"}
-                  onClick={() => setSelectedPath(path)}
-                >
-                  <span>{formatFileLabel(path)}</span>
-                  <strong>{entry?.status ?? "missing"}</strong>
-                </button>
-              </li>
+              <option key={path} value={path}>
+                {missing ? "⚠ " : ""}{formatFileLabel(path)}
+              </option>
             );
           })}
-        </ul>
-      </aside>
+        </select>
+      </div>
 
-      <article className="panel editor-panel">
-        <div className="editor-header">
-          <div>
-            <p className="eyebrow">Viewing</p>
-            <h2>{selectedPath}</h2>
-          </div>
-          <div className={`status-badge ${file?.status ?? "missing"}`}>
-            {file?.status ?? "missing"}
-          </div>
-        </div>
+      {file?.error ? <p className="error-copy">{file.error}</p> : null}
 
-        {file?.error ? <p className="error-copy">{file.error}</p> : null}
+      <textarea
+        className="editor"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder="This file is missing. Saving will create it without overwriting unrelated files."
+        disabled={!isEditable(file)}
+      />
 
-        <textarea
-          className="editor"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="This file is missing. Saving will create it without overwriting unrelated files."
-          disabled={!isEditable(file)}
-        />
-
-        <div className="editor-actions">
-          <p className="muted">
-            Only the tracked HARNESS files are writable in Phase 1. Missing files
-            can be created from here if needed.
-          </p>
-          <button
-            className="primary-button"
-            onClick={() => void onSave(selectedPath, draft)}
-            disabled={isSaving || !isEditable(file)}
-          >
-            {isSaving ? "Saving..." : "Save File"}
-          </button>
-        </div>
-      </article>
-    </section>
+      <div className="editor-actions">
+        <p className="muted">Edit tracked setup files directly. Missing files can be created here.</p>
+        <button
+          className="primary-button"
+          onClick={() => void onSave(selectedPath, draft)}
+          disabled={isSaving || !isEditable(file)}
+        >
+          {isSaving ? "Saving..." : "Save File"}
+        </button>
+      </div>
+    </article>
   );
 }

@@ -24,16 +24,8 @@ export function RepoSelector({
   }
 
   return (
-    <section className="hero-panel">
-      <div>
-        <p className="eyebrow">Phase 2</p>
-        <h1>HARNESS intake and bootstrap</h1>
-        <p className="hero-copy">
-          Open a local repository, detect whether HARNESS setup is complete, and
-          either finish bootstrap or land directly on a file-backed project home.
-        </p>
-      </div>
-      <div className="hero-actions">
+    <section className="repo-picker-inline">
+      <div className="repo-picker-row">
         <button className="primary-button" onClick={handlePick} disabled={isLoading}>
           {isLoading ? "Loading..." : "Open Repository"}
         </button>
