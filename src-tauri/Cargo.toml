@@ -2,7 +2,7 @@
 name = "harness"
 version = "0.1.0"
 description = "HARNESS desktop shell"
-authors = ["Codex"]
+authors = ["dippo"]
 edition = "2021"
 
 [lib]
