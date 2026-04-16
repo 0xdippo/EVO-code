@@ -1,6 +1,6 @@
 # EVO Code
 
-> Tauri desktop app for Claude/Codex agent workflows in either local Standalone mode or Remote mode backed by a separate `evo-host` service.
+> Tauri desktop app for Claude/Codex agent workflows in either local Standalone mode or Remote mode backed by a separate `EVO-Code-host` service.
 
 ---
 
@@ -16,19 +16,21 @@ EVO Code is the desktop UI. It manages:
 The app supports two execution modes:
 
 - **Standalone** (default): all agent execution runs on the same machine as the app.
-- **Remote**: app acts as a thin client, execution runs on a host machine via the separate **`evo-host` repository**.
+- **Remote**: app acts as a thin client, execution runs on a host machine via the separate **`EVO-Code-host` repository**.
 
 ---
 
 ## Repositories
 
-- **App repo** (this repo): UI + local Tauri runtime
-- **Host repo**: `evo-host` (separate repo/service process)
+- **App repo** (this repo): UI + local Tauri runtime  
+  GitHub: https://github.com/0xdippo/EVO-Code
+- **Host repo**: `EVO-Code-host` (separate repo/service process)  
+  GitHub: https://github.com/0xdippo/EVO-Code-host
 
 Remote mode requires both:
 
 1. EVO Code app on client machine
-2. `evo-host` running on host machine
+2. `EVO-Code-host` running on host machine
 
 ---
 
@@ -40,11 +42,11 @@ Remote mode requires both:
 - Rust toolchain
 - `claude` CLI and/or `codex` CLI for providers you plan to use
 
-### Host (`evo-host`)
+### Host (`EVO-Code-host`)
 
 - Rust toolchain
 - `claude` and/or `codex` installed on host
-- host config at `~/.config/evo-host/config.toml`
+- host config at `~/.config/evo-code-host/config.toml`
 
 ---
 
@@ -66,13 +68,13 @@ Then in the app:
 
 ## Quick Start (Remote)
 
-### 1) Run `evo-host` on host machine
+### 1) Run `EVO-Code-host` on host machine
 
-From the `evo-host` repo:
+From the `EVO-Code-host` repo:
 
 ```bash
-mkdir -p ~/.config/evo-host
-cp config/config.example.toml ~/.config/evo-host/config.toml
+mkdir -p ~/.config/evo-code-host
+cp config/config.example.toml ~/.config/evo-code-host/config.toml
 ```
 
 Edit config:
@@ -113,7 +115,7 @@ curl -sS http://127.0.0.1:7700/readyz
 | Mode | Behavior |
 |------|----------|
 | Standalone | Uses local Tauri commands and local machine CLIs |
-| Remote | Uses HTTP/WS to `evo-host`; execution happens on host machine |
+| Remote | Uses HTTP/WS to `EVO-Code-host`; execution happens on host machine |
 
 ---
 
@@ -157,7 +159,7 @@ curl -v http://<host-ip>:7700/healthz
 ```bash
 lsof -nP -iTCP:7700 -sTCP:LISTEN
 ```
-4. If app fails but `curl` works, ensure host has CORS-enabled build and restart `evo-host`
+4. If app fails but `curl` works, ensure host has CORS-enabled build and restart `EVO-Code-host`
 
 ---
 
@@ -167,9 +169,9 @@ If remote thread errors with:
 
 `Failed to run provider claude: No such file or directory (os error 2)`
 
-`evo-host` can’t find provider binary in launchd PATH. Add PATH in:
+`EVO-Code-host` can’t find provider binary in launchd PATH. Add PATH in:
 
-`~/Library/LaunchAgents/com.evo.host.plist`
+`~/Library/LaunchAgents/com.evocode.host.plist`
 
 Include your CLI locations (for example NVM bin path), then reload service.
 
@@ -201,5 +203,5 @@ EVO-Code (this repo)
   src-tauri/         # local runtime + IPC commands
 
 Remote flow:
-  EVO-Code UI -> HTTP/WS -> evo-host -> claude/codex CLIs -> repo ops/
+  EVO-Code UI -> HTTP/WS -> EVO-Code-host -> claude/codex CLIs -> repo ops/
 ```
