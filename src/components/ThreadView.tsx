@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { agentDisplayName } from "../lib/setup";
-import { cancelChatMessage, listenForChatStream, listenForChatTool, loadChatThread, sendChatMessage } from "../lib/tauri";
+import {
+  cancelChatMessage,
+  listenForChatStream,
+  listenForChatThreadUpdated,
+  listenForChatTool,
+  loadChatThread,
+  sendChatMessage,
+} from "../lib/transport";
 import type { AgentConfig, ChatMessage, ChatThread, ToolBlock } from "../types/harness";
 
 interface ThreadViewProps {
@@ -116,6 +123,38 @@ export function ThreadView({ rootPath, availableAgents }: ThreadViewProps) {
 
     return () => {
       cancelled = true;
+    };
+  }, [rootPath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    void listenForChatThreadUpdated((event) => {
+      if (cancelled || event.rootPath !== rootPath) {
+        return;
+      }
+
+      void loadChatThread(rootPath)
+        .then((nextThread) => {
+          if (!cancelled) {
+            setThread(nextThread);
+          }
+        })
+        .catch(() => {
+          // Keep current thread UI state if a reload fails.
+        });
+    }).then((stopListening) => {
+      if (cancelled) {
+        stopListening();
+        return;
+      }
+      unlisten = stopListening;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
     };
   }, [rootPath]);
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { listChangedFiles, loadChangedFileDiff } from "../lib/tauri";
+import { listChangedFiles, loadChangedFileDiff } from "../lib/transport";
 import type {
   ChangedFileDiff,
   ChangedFileEntry,

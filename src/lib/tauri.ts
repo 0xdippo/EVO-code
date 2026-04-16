@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentConfig,
   ChatStreamEvent,
+  ChatThreadUpdatedEvent,
   ChatToolEvent,
   ChatThread,
   ChangedFileDiff,
@@ -193,4 +194,10 @@ export function listenForChatTool(
   listener: (event: ChatToolEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<ChatToolEvent>("chat-tool", (event) => listener(event.payload));
+}
+
+export function listenForChatThreadUpdated(
+  listener: (event: ChatThreadUpdatedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<ChatThreadUpdatedEvent>("chat-thread-updated", (event) => listener(event.payload));
 }

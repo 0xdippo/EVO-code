@@ -185,6 +185,10 @@ export interface ChatToolEvent {
   isError: boolean;
 }
 
+export interface ChatThreadUpdatedEvent {
+  rootPath: string;
+}
+
 export interface RepoSnapshot {
   rootPath: string;
   hasOpsDirectory: boolean;

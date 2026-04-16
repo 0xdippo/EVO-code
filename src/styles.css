@@ -103,6 +103,19 @@
   color: rgba(30, 32, 40, 0.52);
 }
 
+:root[data-theme="slate"] .field span,
+:root[data-theme="slate"] .field-label,
+:root[data-theme="slate"] .key-value-list dt,
+:root[data-theme="slate"] .task-phase-header span,
+:root[data-theme="slate"] .task-meta,
+:root[data-theme="slate"] .task-table th,
+:root[data-theme="slate"] .task-progress-summary,
+:root[data-theme="slate"] .checklist-status,
+:root[data-theme="slate"] .review-commit-summary,
+:root[data-theme="slate"] .change-file-copy small {
+  color: rgba(30, 32, 40, 0.56);
+}
+
 :root[data-theme="slate"] .topbar-project-name {
   color: #1e2028;
 }
@@ -155,6 +168,12 @@
   background: rgba(255, 255, 255, 0.8);
   border-color: rgba(0, 0, 0, 0.12);
   color: #1e2028;
+}
+
+:root[data-theme="slate"] .field input::placeholder,
+:root[data-theme="slate"] .field textarea::placeholder,
+:root[data-theme="slate"] .editor::placeholder {
+  color: rgba(30, 32, 40, 0.34);
 }
 
 :root[data-theme="slate"] .chat-message {
@@ -288,6 +307,10 @@
   border-color: rgba(0, 0, 0, 0.1);
 }
 
+:root[data-theme="slate"] .settings-menu-label {
+  color: rgba(30, 32, 40, 0.38);
+}
+
 :root[data-theme="slate"] .settings-theme-btn {
   color: rgba(30, 32, 40, 0.6);
 }
@@ -306,6 +329,15 @@
   background: rgba(0, 0, 0, 0.03);
 }
 
+:root[data-theme="slate"] .warning-summary summary {
+  color: rgba(30, 32, 40, 0.72);
+}
+
+:root[data-theme="slate"] .warning-summary strong,
+:root[data-theme="slate"] .warning-list li strong {
+  color: #1e2028;
+}
+
 :root[data-theme="slate"] .setup-gate {
   background: rgba(230, 233, 242, 0.7);
 }
@@ -315,6 +347,275 @@
   border-color: rgba(0, 0, 0, 0.08);
 }
 /* ────────────────────────────────────────────────────────── */
+
+/* ── Linen theme (warm light) ────────────────────────────── */
+:root[data-theme="linen"] {
+  color: #2f2a24;
+  background:
+    radial-gradient(circle at top left, rgba(204, 163, 109, 0.18), transparent 34%),
+    radial-gradient(circle at top right, rgba(167, 177, 189, 0.14), transparent 26%),
+    linear-gradient(180deg, #f5f1e8 0%, #ece7dd 100%);
+}
+
+:root[data-theme="linen"] .topbar,
+:root[data-theme="linen"] .panel,
+:root[data-theme="linen"] .hero-panel,
+:root[data-theme="linen"] .status-panel,
+:root[data-theme="linen"] .empty-state {
+  background: rgba(255, 252, 247, 0.9);
+  border-color: rgba(75, 63, 49, 0.14);
+  box-shadow: 0 2px 10px rgba(45, 34, 22, 0.08);
+  backdrop-filter: none;
+}
+
+:root[data-theme="linen"] .muted,
+:root[data-theme="linen"] .hero-copy,
+:root[data-theme="linen"] .empty-state p,
+:root[data-theme="linen"] .status-panel p,
+:root[data-theme="linen"] .warning-list span {
+  color: rgba(47, 42, 36, 0.62);
+}
+
+:root[data-theme="linen"] .field span,
+:root[data-theme="linen"] .field-label,
+:root[data-theme="linen"] .key-value-list dt,
+:root[data-theme="linen"] .task-phase-header span,
+:root[data-theme="linen"] .task-meta,
+:root[data-theme="linen"] .task-table th,
+:root[data-theme="linen"] .task-progress-summary,
+:root[data-theme="linen"] .checklist-status,
+:root[data-theme="linen"] .review-commit-summary,
+:root[data-theme="linen"] .change-file-copy small {
+  color: rgba(47, 42, 36, 0.6);
+}
+
+:root[data-theme="linen"] .topbar-project-name,
+:root[data-theme="linen"] h1,
+:root[data-theme="linen"] h2,
+:root[data-theme="linen"] h3 {
+  color: #2f2a24;
+}
+
+:root[data-theme="linen"] .topbar-meta {
+  color: rgba(47, 42, 36, 0.52);
+}
+
+:root[data-theme="linen"] .eyebrow,
+:root[data-theme="linen"] .context-summary-text,
+:root[data-theme="linen"] .context-popover-author,
+:root[data-theme="linen"] .settings-theme-btn.active,
+:root[data-theme="linen"] .roster-agent-badge {
+  color: #9a6b2f;
+}
+
+:root[data-theme="linen"] .toggle-button {
+  background: rgba(72, 57, 40, 0.08);
+  color: rgba(47, 42, 36, 0.7);
+}
+
+:root[data-theme="linen"] .toggle-button.active {
+  background: rgba(154, 107, 47, 0.14);
+  color: #7a5221;
+}
+
+:root[data-theme="linen"] .primary-button {
+  background: linear-gradient(135deg, #c8914d 0%, #b17734 100%);
+  color: #fffaf1;
+}
+
+:root[data-theme="linen"] .secondary-button,
+:root[data-theme="linen"] .path-chip,
+:root[data-theme="linen"] .settings-btn {
+  color: #2f2a24;
+  background: rgba(72, 57, 40, 0.07);
+  border-color: rgba(75, 63, 49, 0.16);
+}
+
+:root[data-theme="linen"] .settings-btn:hover,
+:root[data-theme="linen"] .settings-btn.active,
+:root[data-theme="linen"] .settings-theme-btn:hover {
+  background: rgba(72, 57, 40, 0.11);
+  color: #2f2a24;
+}
+
+:root[data-theme="linen"] input:not([type="checkbox"]),
+:root[data-theme="linen"] select,
+:root[data-theme="linen"] .field input,
+:root[data-theme="linen"] .field select,
+:root[data-theme="linen"] .field textarea,
+:root[data-theme="linen"] .chat-textarea,
+:root[data-theme="linen"] .chat-model-select,
+:root[data-theme="linen"] .editor,
+:root[data-theme="linen"] .roster-add-form {
+  background: rgba(255, 252, 246, 0.92);
+  border-color: rgba(75, 63, 49, 0.2);
+  color: #2f2a24;
+}
+
+:root[data-theme="linen"] .field input::placeholder,
+:root[data-theme="linen"] .field textarea::placeholder,
+:root[data-theme="linen"] .editor::placeholder {
+  color: rgba(47, 42, 36, 0.4);
+}
+
+:root[data-theme="linen"] .chat-textarea::placeholder {
+  color: rgba(47, 42, 36, 0.36);
+}
+
+:root[data-theme="linen"] .chat-textarea:focus {
+  border-color: rgba(154, 107, 47, 0.42);
+}
+
+:root[data-theme="linen"] .chat-message,
+:root[data-theme="linen"] .roster-panel,
+:root[data-theme="linen"] .roster-agent-row,
+:root[data-theme="linen"] .warning-summary {
+  background: rgba(72, 57, 40, 0.045);
+  border-color: rgba(75, 63, 49, 0.14);
+}
+
+:root[data-theme="linen"] .warning-summary summary {
+  color: rgba(47, 42, 36, 0.76);
+}
+
+:root[data-theme="linen"] .warning-summary strong,
+:root[data-theme="linen"] .warning-list li strong {
+  color: #2f2a24;
+}
+
+:root[data-theme="linen"] .chat-message.user {
+  border-color: rgba(154, 107, 47, 0.34);
+}
+
+:root[data-theme="linen"] .chat-message.included {
+  background: rgba(154, 107, 47, 0.06);
+  border-color: rgba(154, 107, 47, 0.28);
+}
+
+:root[data-theme="linen"] .chat-message-meta strong,
+:root[data-theme="linen"] .chat-message p,
+:root[data-theme="linen"] .roster-agent-name {
+  color: #2f2a24;
+}
+
+:root[data-theme="linen"] .chat-message-meta span,
+:root[data-theme="linen"] .roster-agent-meta {
+  color: rgba(47, 42, 36, 0.5);
+}
+
+:root[data-theme="linen"] .include-toggle {
+  color: rgba(47, 42, 36, 0.38);
+  border-color: rgba(75, 63, 49, 0.2);
+}
+
+:root[data-theme="linen"] .include-toggle.active {
+  color: #9a6b2f;
+  border-color: rgba(154, 107, 47, 0.4);
+}
+
+:root[data-theme="linen"] .context-summary {
+  border-color: rgba(154, 107, 47, 0.28);
+  background: rgba(154, 107, 47, 0.065);
+}
+
+:root[data-theme="linen"] .context-summary:hover,
+:root[data-theme="linen"] .context-summary.open {
+  border-color: rgba(154, 107, 47, 0.44);
+  background: rgba(154, 107, 47, 0.11);
+}
+
+:root[data-theme="linen"] .context-popover,
+:root[data-theme="linen"] .settings-menu,
+:root[data-theme="linen"] .setup-gate-card {
+  background: rgba(252, 248, 241, 0.98);
+  border-color: rgba(75, 63, 49, 0.14);
+}
+
+:root[data-theme="linen"] .settings-menu-label {
+  color: rgba(74, 62, 48, 0.55);
+}
+
+:root[data-theme="linen"] .settings-theme-btn {
+  color: rgba(47, 42, 36, 0.72);
+}
+
+:root[data-theme="linen"] .context-popover-preview {
+  color: rgba(47, 42, 36, 0.62);
+}
+
+:root[data-theme="linen"] .setup-gate {
+  background: rgba(236, 231, 221, 0.72);
+}
+
+/* Shared light-theme contrast normalization */
+:root[data-theme="slate"] .workflow-step.pending,
+:root[data-theme="linen"] .workflow-step.pending {
+  color: rgba(34, 37, 46, 0.72);
+}
+
+:root[data-theme="slate"] .workflow-step-label,
+:root[data-theme="linen"] .workflow-step-label {
+  color: rgba(34, 37, 46, 0.56);
+}
+
+:root[data-theme="slate"] .roster-section-title,
+:root[data-theme="linen"] .roster-section-title,
+:root[data-theme="slate"] .roster-add-field,
+:root[data-theme="linen"] .roster-add-field,
+:root[data-theme="slate"] .roster-add-btn,
+:root[data-theme="linen"] .roster-add-btn,
+:root[data-theme="slate"] .roster-remove-btn,
+:root[data-theme="linen"] .roster-remove-btn {
+  color: rgba(34, 37, 46, 0.62);
+}
+
+:root[data-theme="slate"] .roster-add-btn,
+:root[data-theme="linen"] .roster-add-btn {
+  border-color: rgba(34, 37, 46, 0.2);
+  background: rgba(34, 37, 46, 0.05);
+}
+
+:root[data-theme="slate"] .roster-add-btn:hover,
+:root[data-theme="linen"] .roster-add-btn:hover {
+  background: rgba(34, 37, 46, 0.09);
+  color: rgba(34, 37, 46, 0.86);
+}
+
+:root[data-theme="slate"] .roster-add-field input[type="text"],
+:root[data-theme="slate"] .roster-add-field input:not([type]),
+:root[data-theme="slate"] .roster-add-field select,
+:root[data-theme="linen"] .roster-add-field input[type="text"],
+:root[data-theme="linen"] .roster-add-field input:not([type]),
+:root[data-theme="linen"] .roster-add-field select {
+  background: rgba(255, 255, 255, 0.86);
+  border-color: rgba(34, 37, 46, 0.18);
+  color: rgba(34, 37, 46, 0.88);
+}
+
+:root[data-theme="slate"] .file-select,
+:root[data-theme="linen"] .file-select {
+  color: rgba(34, 37, 46, 0.9);
+}
+
+:root[data-theme="slate"] .status-badge,
+:root[data-theme="linen"] .status-badge {
+  background: rgba(34, 37, 46, 0.08);
+}
+
+:root[data-theme="slate"] .status-badge.skip,
+:root[data-theme="slate"] .status-badge.undecided,
+:root[data-theme="linen"] .status-badge.skip,
+:root[data-theme="linen"] .status-badge.undecided {
+  color: rgba(34, 37, 46, 0.62);
+}
+
+:root[data-theme="slate"] .task-phase,
+:root[data-theme="linen"] .task-phase,
+:root[data-theme="slate"] .checklist-panel,
+:root[data-theme="linen"] .checklist-panel {
+  background: rgba(34, 37, 46, 0.045);
+  border-color: rgba(34, 37, 46, 0.12);
+}
 
 /* ── Noir theme ───────────────────────────────────────────── */
 :root[data-theme="noir"] {
@@ -459,6 +760,112 @@ button {
   overflow-wrap: anywhere;
 }
 
+.topbar-server-badge {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #6ee7b7;
+  letter-spacing: 0.02em;
+}
+
+.topbar-server-remote {
+  color: #93c5fd;
+}
+
+.settings-server-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.settings-server-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings-server-status {
+  font-size: 0.78rem;
+  color: rgba(244, 239, 231, 0.55);
+}
+
+.settings-server-btn {
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(244, 239, 231, 0.8);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.settings-server-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.settings-server-btn.danger {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #f87171;
+}
+
+.settings-server-btn.danger:hover {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.settings-server-error {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #f87171;
+}
+
+.settings-key-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-key-display {
+  flex: 1;
+  font-size: 0.68rem;
+  padding: 3px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(244, 239, 231, 0.7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-field-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(244, 239, 231, 0.35);
+  margin: 4px 0 2px;
+}
+
+.settings-field-input {
+  width: 100%;
+  padding: 5px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(244, 239, 231, 0.85);
+  font-size: 0.8rem;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.settings-field-input:focus {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
 .hero-panel {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
@@ -547,6 +954,25 @@ button {
 .toggle-button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.remote-path-input {
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(244, 239, 231, 0.85);
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.remote-path-input:focus {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.remote-path-input::placeholder {
+  color: rgba(244, 239, 231, 0.3);
 }
 
 .path-chip {
@@ -2375,4 +2801,31 @@ h3 {
 }
 :root[data-theme="slate"] .tool-block-code {
   color: #374151;
+}
+
+:root[data-theme="linen"] .tool-block {
+  border-color: rgba(75, 63, 49, 0.16);
+}
+:root[data-theme="linen"] .tool-block-header {
+  background: rgba(72, 57, 40, 0.05);
+  color: #4a3f33;
+}
+:root[data-theme="linen"] .tool-block-header:hover {
+  background: rgba(72, 57, 40, 0.09);
+}
+:root[data-theme="linen"] .tool-block-summary {
+  color: #3e342a;
+}
+:root[data-theme="linen"] .tool-block-running {
+  color: #9a6b2f;
+}
+:root[data-theme="linen"] .tool-block-check {
+  color: #3d8a5d;
+}
+:root[data-theme="linen"] .tool-block-body {
+  background: rgba(72, 57, 40, 0.04);
+  border-top-color: rgba(75, 63, 49, 0.12);
+}
+:root[data-theme="linen"] .tool-block-code {
+  color: #3e342a;
 }

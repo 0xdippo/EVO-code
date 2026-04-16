@@ -1,9 +1,21 @@
+use axum::{
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query, State as AxumState,
+    },
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use chrono::Local;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
     fs,
     io::{BufRead, BufReader, Read},
+    net::TcpListener as StdTcpListener,
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -14,6 +26,8 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::broadcast;
+use tower_http::cors::{Any, CorsLayer};
 
 const TRACKED_FILES: [&str; 7] = [
     "PROJECT.md",
@@ -231,6 +245,12 @@ struct ChatToolEvent {
     is_error: bool,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatThreadUpdatedEvent {
+    root_path: String,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatMessage {
@@ -263,6 +283,56 @@ struct DoctorFinding {
     severity: String,
     title: String,
     detail: String,
+}
+
+/// Events broadcast to all connected remote WebSocket clients.
+#[derive(Clone, Serialize)]
+#[serde(tag = "event", content = "payload", rename_all = "camelCase")]
+enum RemoteEvent {
+    #[serde(rename = "chat-stream")]
+    ChatStream(ChatStreamEvent),
+    #[serde(rename = "chat-tool")]
+    ChatTool(ChatToolEvent),
+    #[serde(rename = "chat-thread-updated")]
+    ChatThreadUpdated(ChatThreadUpdatedEvent),
+    #[serde(rename = "run-output")]
+    RunOutput(RunOutputEvent),
+    #[serde(rename = "run-status")]
+    RunStatus(RunStatusEvent),
+}
+
+struct RemoteServer {
+    api_key: Mutex<Option<String>>,
+    enabled: Mutex<bool>,
+    event_tx: broadcast::Sender<RemoteEvent>,
+}
+
+impl RemoteServer {
+    fn new() -> Self {
+        let (tx, _) = broadcast::channel(256);
+        RemoteServer {
+            api_key: Mutex::new(None),
+            enabled: Mutex::new(false),
+            event_tx: tx,
+        }
+    }
+
+    fn generate_key() -> String {
+        let mut rng = rand::thread_rng();
+        (0..32)
+            .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+            .collect()
+    }
+
+    fn is_enabled(&self) -> bool {
+        *self.enabled.lock().unwrap()
+    }
+
+    fn broadcast(&self, event: RemoteEvent) {
+        if self.is_enabled() {
+            let _ = self.event_tx.send(event);
+        }
+    }
 }
 
 impl RunManager {
@@ -1479,14 +1549,13 @@ fn spawn_provider(
 }
 
 fn emit_run_status(app: &AppHandle, root_path: &str, run_id: &str, status: &str) {
-    let _ = app.emit(
-        "run-status",
-        RunStatusEvent {
-            root_path: root_path.into(),
-            run_id: run_id.into(),
-            status: status.into(),
-        },
-    );
+    let event = RunStatusEvent {
+        root_path: root_path.into(),
+        run_id: run_id.into(),
+        status: status.into(),
+    };
+    let _ = app.emit("run-status", event.clone());
+    app.state::<RemoteServer>().broadcast(RemoteEvent::RunStatus(event));
 }
 
 fn stream_claude_json(
@@ -1543,18 +1612,17 @@ fn stream_claude_json(
                                 .cloned()
                                 .unwrap_or_else(|| Value::Object(Default::default()));
                             pending.insert(tool_id.clone(), (tool_name.clone(), input.clone()));
-                            let _ = app.emit(
-                                "chat-tool",
-                                ChatToolEvent {
-                                    root_path: root_path.into(),
-                                    message_id: message_id.into(),
-                                    tool_id,
-                                    tool_name,
-                                    input,
-                                    result: None,
-                                    is_error: false,
-                                },
-                            );
+                            let tool_event = ChatToolEvent {
+                                root_path: root_path.into(),
+                                message_id: message_id.into(),
+                                tool_id,
+                                tool_name,
+                                input,
+                                result: None,
+                                is_error: false,
+                            };
+                            let _ = app.emit("chat-tool", tool_event.clone());
+                            app.state::<RemoteServer>().broadcast(RemoteEvent::ChatTool(tool_event));
                         }
                         _ => {}
                     }
@@ -1587,18 +1655,17 @@ fn stream_claude_json(
                         _ => String::new(),
                     };
                     if let Some((tool_name, input)) = pending.get(&tool_id) {
-                        let _ = app.emit(
-                            "chat-tool",
-                            ChatToolEvent {
-                                root_path: root_path.into(),
-                                message_id: message_id.into(),
-                                tool_id,
-                                tool_name: tool_name.clone(),
-                                input: input.clone(),
-                                result: Some(result_str),
-                                is_error,
-                            },
-                        );
+                        let tool_event = ChatToolEvent {
+                            root_path: root_path.into(),
+                            message_id: message_id.into(),
+                            tool_id,
+                            tool_name: tool_name.clone(),
+                            input: input.clone(),
+                            result: Some(result_str),
+                            is_error,
+                        };
+                        let _ = app.emit("chat-tool", tool_event.clone());
+                        app.state::<RemoteServer>().broadcast(RemoteEvent::ChatTool(tool_event));
                     }
                 }
             }
@@ -1625,17 +1692,25 @@ fn emit_chat_stream(
     chunk: &str,
     done: bool,
 ) {
-    let _ = app.emit(
-        "chat-stream",
-        ChatStreamEvent {
-            root_path: root_path.into(),
-            message_id: message_id.into(),
-            provider: provider.into(),
-            stream: stream.into(),
-            chunk: chunk.into(),
-            done,
-        },
-    );
+    let event = ChatStreamEvent {
+        root_path: root_path.into(),
+        message_id: message_id.into(),
+        provider: provider.into(),
+        stream: stream.into(),
+        chunk: chunk.into(),
+        done,
+    };
+    let _ = app.emit("chat-stream", event.clone());
+    app.state::<RemoteServer>().broadcast(RemoteEvent::ChatStream(event));
+}
+
+fn emit_chat_thread_updated(app: &AppHandle, root_path: &str) {
+    let event = ChatThreadUpdatedEvent {
+        root_path: root_path.into(),
+    };
+    let _ = app.emit("chat-thread-updated", event.clone());
+    app.state::<RemoteServer>()
+        .broadcast(RemoteEvent::ChatThreadUpdated(event));
 }
 
 fn spawn_output_reader<R: std::io::Read + Send + 'static>(
@@ -1658,15 +1733,14 @@ fn spawn_output_reader<R: std::io::Read + Send + 'static>(
                 all_output.push(normalized.clone());
             }
 
-            let _ = app.emit(
-                "run-output",
-                RunOutputEvent {
-                    root_path: root_path.clone(),
-                    run_id: run_id.clone(),
-                    stream: stream.into(),
-                    chunk: line,
-                },
-            );
+            let event = RunOutputEvent {
+                root_path: root_path.clone(),
+                run_id: run_id.clone(),
+                stream: stream.into(),
+                chunk: line,
+            };
+            let _ = app.emit("run-output", event.clone());
+            app.state::<RemoteServer>().broadcast(RemoteEvent::RunOutput(event));
         }
     })
 }
@@ -1925,6 +1999,7 @@ fn send_chat_message_impl(app: AppHandle, input: SendChatMessageInput) -> Result
     });
 
     write_chat_messages(&root, &messages)?;
+    emit_chat_thread_updated(&app, &input.root_path);
 
     Ok(ChatThread {
         root_path: input.root_path,
@@ -2460,6 +2535,793 @@ struct ChatProcessState {
     child: Mutex<Option<Child>>,
 }
 
+// ---------------------------------------------------------------------------
+// Axum HTTP / WebSocket server
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct HttpState {
+    app: AppHandle,
+}
+
+fn check_api_key(headers: &HeaderMap, app: &AppHandle) -> bool {
+    let server = app.state::<RemoteServer>();
+    let stored = server.api_key.lock().unwrap();
+    let Some(ref key) = *stored else { return false };
+    headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == key.as_str())
+        .unwrap_or(false)
+}
+
+macro_rules! require_key {
+    ($headers:expr, $state:expr) => {
+        if !check_api_key(&$headers, &$state.app) {
+            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "unauthorized"}))).into_response();
+        }
+    };
+}
+
+// --- Request bodies ---
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RootPathBody {
+    root_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WriteFileBody {
+    root_path: String,
+    file_path: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunIdBody {
+    root_path: String,
+    run_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavePlanBody {
+    root_path: String,
+    run_id: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffBody {
+    root_path: String,
+    path: String,
+    change_type: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitBody {
+    root_path: String,
+    message: String,
+}
+
+// --- Handlers ---
+
+async fn handle_open_repository(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RootPathBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    match build_snapshot(&body.root_path) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_setup_project(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let root_path = match body.get("rootPath").and_then(Value::as_str) {
+        Some(v) => v.to_string(),
+        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "rootPath required"}))).into_response(),
+    };
+    let input: SetupProjectInput = match serde_json::from_value(body.get("input").cloned().unwrap_or_else(|| body.clone())) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    };
+    match setup_project_impl(&root_path, input) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_write_repository_file(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<WriteFileBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    match write_repository_file_impl(&body.root_path, &body.file_path, body.content) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_create_plan_run(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RootPathBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    match create_plan_run_impl(&body.root_path) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_save_plan(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<SavePlanBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    match save_plan_impl(&body.root_path, &body.run_id, body.content) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_approve_plan(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RunIdBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    match approve_plan_impl(&body.root_path, &body.run_id) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_reject_plan(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RunIdBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    match reject_plan_impl(&body.root_path, &body.run_id) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_start_run(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RunIdBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let app = s.app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.state::<RunManager>();
+        start_run_impl(&app, &manager, &body.root_path, &body.run_id)
+    }).await;
+    match result {
+        Ok(Ok(v)) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn handle_cancel_run(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RunIdBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let app = s.app.clone();
+    let manager = app.state::<RunManager>();
+    match cancel_run_impl(&manager, &body.root_path, &body.run_id) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_list_changed_files(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RootPathBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let root = PathBuf::from(&body.root_path);
+    let result = (|| -> Result<ChangedFilesSnapshot, String> {
+        validate_repo_root(&root)?;
+        let repo_root = resolve_git_repo_root(&root)?;
+        let files = parse_changed_files(&repo_root)?;
+        Ok(ChangedFilesSnapshot { repo_root: repo_root.display().to_string(), files })
+    })();
+    match result {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_load_changed_file_diff(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<DiffBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let root = PathBuf::from(&body.root_path);
+    let result = (|| -> Result<ChangedFileDiff, String> {
+        validate_repo_root(&root)?;
+        let repo_root = resolve_git_repo_root(&root)?;
+        let file = find_changed_file(&repo_root, &body.path, Some(&body.change_type))?;
+        let diff = match file.change_type.as_str() {
+            "added" | "untracked" => diff_untracked_or_added_file(&repo_root, &file.path)?,
+            _ => diff_tracked_file(&repo_root, &file.path)?,
+        };
+        Ok(ChangedFileDiff { repo_root: repo_root.display().to_string(), path: file.path, previous_path: file.previous_path, change_type: file.change_type, diff })
+    })();
+    match result {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_apply_review_decision(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let input: ReviewDecisionInput = match serde_json::from_value(body.get("input").cloned().unwrap_or(body)) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    };
+    let root = PathBuf::from(&input.root_path);
+    let result = (|| -> Result<(), String> {
+        validate_repo_root(&root)?;
+        let repo_root = resolve_git_repo_root(&root)?;
+        let file = find_changed_file(&repo_root, &input.path, Some(&input.change_type))?;
+        if let Some(pp) = input.previous_path.as_deref() {
+            if file.previous_path.as_deref() != Some(pp) {
+                return Err(format!("Previous path mismatch for {}.", input.path));
+            }
+        }
+        match input.decision.as_str() {
+            "accept" => run_git_command_checked(&repo_root, &["add", "--", &file.path], &format!("Staging {}", file.path)),
+            "reject" => reject_changed_file(&repo_root, &file),
+            other => Err(format!("Unsupported review decision: {other}")),
+        }
+    })();
+    match result {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!(null))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_clear_accepted_review_decision(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let input: ClearAcceptedDecisionInput = match serde_json::from_value(body.get("input").cloned().unwrap_or(body)) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    };
+    let root = PathBuf::from(&input.root_path);
+    let result = (|| -> Result<(), String> {
+        validate_repo_root(&root)?;
+        let repo_root = resolve_git_repo_root(&root)?;
+        validate_relative_repo_path(&input.path)?;
+        ensure_path_within_repo(&repo_root, &input.path)?;
+        let mut args = vec!["restore", "--staged", "--"];
+        if let Some(pp) = input.previous_path.as_deref() { args.push(pp); }
+        args.push(&input.path);
+        run_git_command_allow_missing_path(&repo_root, &args, &format!("Unstaging {}", input.path))
+    })();
+    match result {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!(null))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_commit_accepted_changes(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<CommitBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    match commit_accepted_changes_impl(&body.root_path, &body.message) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_run_doctor_checks(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RootPathBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    match run_doctor_report(&body.root_path) {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_load_chat_thread(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<RootPathBody>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let root = PathBuf::from(&body.root_path);
+    let result = (|| -> Result<ChatThread, String> {
+        validate_repo_root(&root)?;
+        ensure_repo_structure(&root)?;
+        let messages = read_chat_messages(&root)?;
+        Ok(ChatThread { root_path: body.root_path, path: chat_thread_relative_path().into(), messages })
+    })();
+    match result {
+        Ok(v) => (StatusCode::OK, Json(serde_json::to_value(v).unwrap())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn handle_send_chat_message(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let input: SendChatMessageInput = match serde_json::from_value(body.get("input").cloned().unwrap_or(body)) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    };
+    let app = s.app.clone();
+    let app2 = app.clone();
+    let root_path = input.root_path.clone();
+    let display_name = input.agent_name.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or(input.provider.trim()).to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || send_chat_message_impl(app, input)).await;
+    match result {
+        Ok(Ok(ref thread)) => {
+            if let Some(last) = thread.messages.iter().rev().find(|m| m.role == "assistant") {
+                emit_chat_stream(&app2, &root_path, &last.id, &last.provider, "stdout", "", true);
+            }
+            (StatusCode::OK, Json(serde_json::to_value(thread).unwrap())).into_response()
+        }
+        Ok(Err(ref e)) => {
+            emit_chat_stream(&app2, &root_path, "", &display_name, "stderr", "", true);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response()
+        }
+        Err(ref e) => {
+            emit_chat_stream(&app2, &root_path, "", &display_name, "stderr", "", true);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response()
+        }
+    }
+}
+
+async fn handle_cancel_chat_message(
+    AxumState(s): AxumState<HttpState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    require_key!(headers, s);
+    let state = s.app.state::<ChatProcessState>();
+    if let Some(mut child) = state.child.lock().unwrap().take() {
+        let _ = child.kill();
+    }
+    (StatusCode::OK, Json(serde_json::json!(null))).into_response()
+}
+
+#[derive(Deserialize)]
+struct WsQuery { key: Option<String> }
+
+async fn handle_ws(
+    AxumState(s): AxumState<HttpState>,
+    Query(query): Query<WsQuery>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    let server = s.app.state::<RemoteServer>();
+    let stored = server.api_key.lock().unwrap().clone();
+    let authed = stored.as_deref()
+        .zip(query.key.as_deref())
+        .map(|(stored, provided)| stored == provided)
+        .unwrap_or(false);
+
+    if !authed {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+
+    let rx = server.event_tx.subscribe();
+    ws.on_upgrade(move |socket| ws_handler(socket, rx))
+}
+
+async fn ws_handler(mut socket: WebSocket, mut rx: broadcast::Receiver<RemoteEvent>) {
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                if let Ok(text) = serde_json::to_string(&event) {
+                    if socket.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+fn build_router(app: AppHandle) -> Router {
+    let state = HttpState { app };
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    Router::new()
+        .route("/api/open_repository", post(handle_open_repository))
+        .route("/api/setup_project", post(handle_setup_project))
+        .route("/api/write_repository_file", post(handle_write_repository_file))
+        .route("/api/create_plan_run", post(handle_create_plan_run))
+        .route("/api/save_plan", post(handle_save_plan))
+        .route("/api/approve_plan", post(handle_approve_plan))
+        .route("/api/reject_plan", post(handle_reject_plan))
+        .route("/api/start_run", post(handle_start_run))
+        .route("/api/cancel_run", post(handle_cancel_run))
+        .route("/api/list_changed_files", post(handle_list_changed_files))
+        .route("/api/load_changed_file_diff", post(handle_load_changed_file_diff))
+        .route("/api/apply_review_decision", post(handle_apply_review_decision))
+        .route("/api/clear_accepted_review_decision", post(handle_clear_accepted_review_decision))
+        .route("/api/commit_accepted_changes", post(handle_commit_accepted_changes))
+        .route("/api/run_doctor_checks", post(handle_run_doctor_checks))
+        .route("/api/load_chat_thread", post(handle_load_chat_thread))
+        .route("/api/send_chat_message", post(handle_send_chat_message))
+        .route("/api/cancel_chat_message", post(handle_cancel_chat_message))
+        .route("/ws", get(handle_ws))
+        .layer(cors)
+        .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands for server management
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerStatus {
+    enabled: bool,
+    api_key: Option<String>,
+    port: u16,
+}
+
+fn make_server_status(server: &RemoteServer) -> ServerStatus {
+    let enabled = server.is_enabled();
+    let api_key = server.api_key.lock().unwrap().clone();
+    ServerStatus { enabled, api_key, port: 7700 }
+}
+
+#[tauri::command]
+fn get_server_status(app: AppHandle) -> ServerStatus {
+    make_server_status(&app.state::<RemoteServer>())
+}
+
+#[tauri::command]
+fn start_remote_server(app: AppHandle) -> Result<ServerStatus, String> {
+    let server = app.state::<RemoteServer>();
+
+    {
+        let mut enabled = server.enabled.lock().unwrap();
+        if *enabled {
+            return Ok(make_server_status(&server));
+        }
+        *enabled = true;
+    }
+
+    // Generate API key if not yet set
+    {
+        let mut key = server.api_key.lock().unwrap();
+        if key.is_none() {
+            *key = Some(RemoteServer::generate_key());
+        }
+    }
+
+    // Preflight bind to catch immediate port/permission issues before reporting success.
+    let preflight = StdTcpListener::bind("0.0.0.0:7700")
+        .map_err(|error| {
+            *server.enabled.lock().unwrap() = false;
+            format!("Failed to bind host server on port 7700: {error}")
+        })?;
+    drop(preflight);
+
+    let router = build_router(app.clone());
+    let app_for_task = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let listener = match tokio::net::TcpListener::bind("0.0.0.0:7700").await {
+            Ok(listener) => listener,
+            Err(error) => {
+                *app_for_task.state::<RemoteServer>().enabled.lock().unwrap() = false;
+                eprintln!("Failed to bind host server on port 7700: {error}");
+                return;
+            }
+        };
+
+        if let Err(error) = axum::serve(listener, router).await {
+            *app_for_task.state::<RemoteServer>().enabled.lock().unwrap() = false;
+            eprintln!("Host server terminated: {error}");
+        }
+    });
+
+    Ok(make_server_status(&server))
+}
+
+#[tauri::command]
+fn stop_remote_server(app: AppHandle) -> ServerStatus {
+    let server = app.state::<RemoteServer>();
+    *server.enabled.lock().unwrap() = false;
+    // Note: we mark disabled but the tokio task keeps the port bound until restart.
+    // New WS connections will be rejected by the enabled check; existing ones drain naturally.
+    make_server_status(&server)
+}
+
+#[tauri::command]
+fn regenerate_api_key(app: AppHandle) -> ServerStatus {
+    let server = app.state::<RemoteServer>();
+    *server.api_key.lock().unwrap() = Some(RemoteServer::generate_key());
+    make_server_status(&server)
+}
+
+// ---------------------------------------------------------------------------
+// Extracted impl functions (shared by Tauri commands and HTTP handlers)
+// ---------------------------------------------------------------------------
+
+fn write_repository_file_impl(root_path: &str, file_path: &str, content: String) -> Result<RepoSnapshot, String> {
+    validate_tracked_path(file_path)?;
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let target = root.join(file_path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create parent directories for {file_path}: {e}"))?;
+    }
+    if file_path.ends_with(".json") {
+        serde_json::from_str::<Value>(&content)
+            .map_err(|e| format!("Refusing to save malformed JSON to {file_path}: {e}"))?;
+    }
+    fs::write(&target, content).map_err(|e| format!("Failed to write {file_path}: {e}"))?;
+    build_snapshot(root_path)
+}
+
+fn create_plan_run_impl(root_path: &str) -> Result<RepoSnapshot, String> {
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let state = read_state_map(&root)?;
+    ensure_no_active_run(&state)?;
+    let run_id = generate_run_id();
+    let run_dir = root.join("ops/runs").join(&run_id);
+    if run_dir.exists() {
+        return Err(format!("Run folder already exists: {}", run_dir.display()));
+    }
+    fs::create_dir(&run_dir)
+        .map_err(|e| format!("Failed to create run folder {}: {e}", run_dir.display()))?;
+    let plan_path = run_dir.join("plan.md");
+    fs::write(&plan_path, "").map_err(|e| format!("Failed to create {}: {e}", plan_path.display()))?;
+    merge_state_value(&root, |state| {
+        state.insert("current_run_id".into(), Value::String(run_id.clone()));
+        state.insert("current_run_status".into(), Value::String("draft".into()));
+        state.insert("last_updated".into(), Value::String(today_string()));
+    })?;
+    build_snapshot(root_path)
+}
+
+fn save_plan_impl(root_path: &str, run_id: &str, content: String) -> Result<RepoSnapshot, String> {
+    let trimmed = run_id.trim();
+    if trimmed.is_empty() { return Err("runId is required.".into()); }
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let state = read_state_map(&root)?;
+    if current_run_id_from_state(&state).as_deref() != Some(trimmed) {
+        return Err(format!("Run {trimmed} is not the active planning run."));
+    }
+    if current_run_status_from_state(&state).as_deref() != Some("draft") {
+        return Err("Only draft plans can be edited.".into());
+    }
+    let plan_path = root.join("ops/runs").join(trimmed).join("plan.md");
+    if !plan_path.exists() { return Err(format!("Plan file does not exist: {}", plan_path.display())); }
+    fs::write(&plan_path, content).map_err(|e| format!("Failed to save {}: {e}", plan_path.display()))?;
+    merge_state_value(&root, |state| { state.insert("last_updated".into(), Value::String(today_string())); })?;
+    build_snapshot(root_path)
+}
+
+fn approve_plan_impl(root_path: &str, run_id: &str) -> Result<RepoSnapshot, String> {
+    let trimmed = run_id.trim();
+    if trimmed.is_empty() { return Err("runId is required.".into()); }
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let state = read_state_map(&root)?;
+    if current_run_id_from_state(&state).as_deref() != Some(trimmed) {
+        return Err(format!("Run {trimmed} is not the active planning run."));
+    }
+    if current_run_status_from_state(&state).as_deref() != Some("draft") {
+        return Err("Only draft plans can be approved.".into());
+    }
+    let relative_plan_path = format!("ops/runs/{trimmed}/plan.md");
+    let content = read_text_file(&root.join(&relative_plan_path))?.unwrap_or_default();
+    if content.trim().is_empty() { return Err("Plan must be saved with non-empty content before approval.".into()); }
+    merge_state_value(&root, |state| {
+        state.insert("current_run_id".into(), Value::String(trimmed.into()));
+        state.insert("current_run_status".into(), Value::String("planned".into()));
+        state.insert("latest_plan_id".into(), Value::String(trimmed.into()));
+        state.insert("latest_plan_path".into(), Value::String(relative_plan_path));
+        state.insert("last_updated".into(), Value::String(today_string()));
+    })?;
+    build_snapshot(root_path)
+}
+
+fn reject_plan_impl(root_path: &str, run_id: &str) -> Result<RepoSnapshot, String> {
+    let trimmed = run_id.trim();
+    if trimmed.is_empty() { return Err("runId is required.".into()); }
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let state = read_state_map(&root)?;
+    if current_run_id_from_state(&state).as_deref() != Some(trimmed) {
+        return Err(format!("Run {trimmed} is not the active planning run."));
+    }
+    merge_state_value(&root, |state| {
+        state.insert("current_run_id".into(), Value::Null);
+        state.insert("current_run_status".into(), Value::String("rejected".into()));
+        state.insert("last_updated".into(), Value::String(today_string()));
+    })?;
+    build_snapshot(root_path)
+}
+
+fn start_run_impl(app: &AppHandle, manager: &RunManager, root_path: &str, run_id: &str) -> Result<RepoSnapshot, String> {
+    let trimmed = run_id.trim();
+    if trimmed.is_empty() { return Err("runId is required.".into()); }
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let state = read_state_map(&root)?;
+    if current_run_id_from_state(&state).as_deref() != Some(trimmed) {
+        return Err(format!("Run {trimmed} is not the active approved run."));
+    }
+    if current_run_status_from_state(&state).as_deref() != Some("planned") {
+        return Err("Only approved plans with status planned can start.".into());
+    }
+    let relative_plan_path = format!("ops/runs/{trimmed}/plan.md");
+    let plan_content = read_text_file(&root.join(&relative_plan_path))?.unwrap_or_default();
+    if plan_content.trim().is_empty() { return Err("Approved plan is empty and cannot be dispatched.".into()); }
+    let project_config = read_json_object(&root.join("ops/project.json"))?
+        .map(|v| serde_json::from_value::<ProjectConfig>(Value::Object(v)).unwrap_or_default())
+        .unwrap_or_default();
+    let provider = implementation_provider(Some(&project_config));
+    let prompt = format!(
+        "Implement the approved HARNESS plan for run {trimmed} in repository {}.\nRead and follow the plan at {relative_plan_path}.\nStay within that scope.\n\n{plan_content}",
+        root.display()
+    );
+    manager.ensure_slot_available(root_path)?;
+    let permission_mode = provider_permission_mode(Some(&project_config), &provider);
+    let mut command = spawn_provider(&provider, &root, &prompt, "", "medium", &permission_mode)?;
+    let mut child = command.spawn().map_err(|e| format!("Failed to spawn provider {provider}: {e}"))?;
+    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture child stdout.".to_string())?;
+    let stderr = child.stderr.take().ok_or_else(|| "Failed to capture child stderr.".to_string())?;
+    let cancel_requested = Arc::new(AtomicBool::new(false));
+    let child = manager.start_run(root_path, trimmed, child, Arc::clone(&cancel_requested))?;
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let stdout_handle = spawn_output_reader(app.clone(), root_path.into(), trimmed.into(), "stdout", stdout, Arc::clone(&output));
+    let stderr_handle = spawn_output_reader(app.clone(), root_path.into(), trimmed.into(), "stderr", stderr, Arc::clone(&output));
+    if let Err(error) = merge_state_value(&root, |state| {
+        state.insert("current_run_id".into(), Value::String(trimmed.into()));
+        state.insert("current_run_status".into(), Value::String("running".into()));
+        state.insert("last_updated".into(), Value::String(today_string()));
+    }) {
+        if let Ok(mut active_child) = child.lock() { let _ = active_child.kill(); }
+        manager.remove_run(root_path, trimmed);
+        let _ = stdout_handle.join();
+        let _ = stderr_handle.join();
+        return Err(error);
+    }
+    emit_run_status(app, root_path, trimmed, "running");
+    finalize_run(app.clone(), root_path.into(), trimmed.into(), cancel_requested, child, output, stdout_handle, stderr_handle);
+    build_snapshot(root_path)
+}
+
+fn cancel_run_impl(manager: &RunManager, root_path: &str, run_id: &str) -> Result<RepoSnapshot, String> {
+    let trimmed = run_id.trim();
+    if trimmed.is_empty() { return Err("runId is required.".into()); }
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let state = read_state_map(&root)?;
+    if current_run_id_from_state(&state).as_deref() != Some(trimmed) || current_run_status_from_state(&state).as_deref() != Some("running") {
+        return Err(format!("Run {trimmed} is not currently running."));
+    }
+    manager.cancel_run(root_path, trimmed)?;
+    build_snapshot(root_path)
+}
+
+fn commit_accepted_changes_impl(root_path: &str, message: &str) -> Result<RepoSnapshot, String> {
+    let trimmed_message = message.trim();
+    if trimmed_message.is_empty() { return Err("Commit message is required.".into()); }
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let repo_root = resolve_git_repo_root(&root)?;
+    let staged = staged_files(&repo_root)?;
+    if staged.is_empty() { return Err("There are no staged accepted files to commit.".into()); }
+    let result = Command::new("git")
+        .args(["commit", "-m", trimmed_message])
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| format!("Failed to run git commit: {e}"))?;
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        let detail = stderr.trim();
+        let fallback = stdout.trim();
+        return Err(if !detail.is_empty() {
+            format!("git commit failed: {detail}")
+        } else if !fallback.is_empty() {
+            format!("git commit failed: {fallback}")
+        } else {
+            "git commit failed.".into()
+        });
+    }
+    merge_state_value(&root, |state| {
+        state.insert("current_run_status".into(), Value::String("reviewed".into()));
+        state.insert("last_updated".into(), Value::String(today_string()));
+    })?;
+    build_snapshot(root_path)
+}
+
+fn setup_project_impl(root_path: &str, input: SetupProjectInput) -> Result<RepoSnapshot, String> {
+    let project_name = input.project_name.trim();
+    if project_name.is_empty() { return Err("Project Name is required.".into()); }
+    let phase = input.phase.trim();
+    if phase.is_empty() { return Err("Phase is required.".into()); }
+    if input.agents.is_empty() { return Err("At least one agent is required.".into()); }
+    let last_updated = input.last_updated.trim();
+    if last_updated.is_empty() { return Err("lastUpdated is required.".into()); }
+    let root = PathBuf::from(root_path);
+    validate_repo_root(&root)?;
+    ensure_repo_structure(&root)?;
+    let project_path = root.join("ops/project.json");
+    let state_path = root.join("ops/state.json");
+    let is_first_time_setup = !state_path.exists();
+    let existing_project = read_json_object(&project_path)?.unwrap_or_default();
+    let merged_project = merge_setup_input(existing_project, &input);
+    write_json_file(&project_path, &Value::Object(merged_project))?;
+    if is_first_time_setup {
+        let mut state = Map::new();
+        state.insert("latest_plan_path".into(), Value::Null);
+        state.insert("latest_plan_id".into(), Value::Null);
+        state.insert("last_run_id".into(), Value::Null);
+        state.insert("current_run_id".into(), Value::Null);
+        state.insert("current_run_status".into(), Value::Null);
+        state.insert("current_phase".into(), Value::String(phase.into()));
+        state.insert("last_completed_task".into(), Value::Null);
+        state.insert("last_updated".into(), Value::String(last_updated.into()));
+        write_json_file(&state_path, &Value::Object(state))?;
+    }
+    build_snapshot(root_path)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(RunManager {
@@ -2468,6 +3330,7 @@ pub fn run() {
         .manage(ChatProcessState {
             child: Mutex::new(None),
         })
+        .manage(RemoteServer::new())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             open_repository,
@@ -2487,7 +3350,11 @@ pub fn run() {
             reject_plan,
             start_run,
             cancel_run,
-            setup_project
+            setup_project,
+            get_server_status,
+            start_remote_server,
+            stop_remote_server,
+            regenerate_api_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

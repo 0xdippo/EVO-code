@@ -5,7 +5,7 @@ import {
   commitAcceptedChanges,
   listChangedFiles,
   loadChangedFileDiff,
-} from "../lib/tauri";
+} from "../lib/transport";
 import type {
   ChangedFileDiff,
   ChangedFileEntry,
