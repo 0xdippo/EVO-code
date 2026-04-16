@@ -32,6 +32,8 @@ Remote mode requires both:
 1. EVO Code app on client machine
 2. `EVO-Code-host` running on host machine
 
+Browser note: `EVO-Code-host` can also serve the browser remote UI, so remote access works from any modern browser-capable device (iPad, tablets, laptops, desktop browsers) in addition to the desktop app.
+
 ---
 
 ## Requirements
