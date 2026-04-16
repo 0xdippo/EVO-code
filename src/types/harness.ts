@@ -130,6 +130,11 @@ export interface ChangedFileDiff {
   diff: string;
 }
 
+export interface SharedRepository {
+  path: string;
+  name: string;
+}
+
 export interface RunOutputEvent {
   rootPath: string;
   runId: string;

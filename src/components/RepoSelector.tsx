@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { listSharedRepositories, type SharedRepository } from "../lib/transport";
 
 interface RepoSelectorProps {
   isLoading: boolean;
@@ -17,6 +18,9 @@ export function RepoSelector({
   const [remoteInput, setRemoteInput] = useState(
     selectedPath ?? window.localStorage.getItem("harness_last_remote_repo") ?? "",
   );
+  const [remoteRepos, setRemoteRepos] = useState<SharedRepository[]>([]);
+  const [loadingRemoteRepos, setLoadingRemoteRepos] = useState(false);
+  const [remoteRepoError, setRemoteRepoError] = useState<string | null>(null);
 
   async function handlePick() {
     const selected = await open({
@@ -35,6 +39,25 @@ export function RepoSelector({
     if (trimmed) await onSelect(trimmed);
   }
 
+  async function refreshRemoteRepos() {
+    if (!isRemote) return;
+    setLoadingRemoteRepos(true);
+    setRemoteRepoError(null);
+    try {
+      const repos = await listSharedRepositories();
+      setRemoteRepos(repos);
+    } catch (error) {
+      setRemoteRepoError(error instanceof Error ? error.message : "Failed to load host repositories.");
+    } finally {
+      setLoadingRemoteRepos(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isRemote) return;
+    void refreshRemoteRepos();
+  }, [isRemote]);
+
   if (isRemote) {
     return (
       <section className="repo-picker-inline">
@@ -42,7 +65,7 @@ export function RepoSelector({
           <input
             className="remote-path-input"
             type="text"
-            placeholder="Host repository path, e.g. /Volumes/NVMe/GitHub/myproject"
+            placeholder="Remote repository path, e.g. /Volumes/NVMe/GitHub/myproject"
             value={remoteInput}
             onChange={(e) => setRemoteInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void handleRemoteOpen(); }}
@@ -51,7 +74,39 @@ export function RepoSelector({
           <button className="primary-button" onClick={() => void handleRemoteOpen()} disabled={isLoading || !remoteInput.trim()}>
             {isLoading ? "Loading..." : "Open"}
           </button>
+          <button
+            className="secondary-button"
+            onClick={() => void refreshRemoteRepos()}
+            disabled={isLoading || loadingRemoteRepos}
+          >
+            {loadingRemoteRepos ? "Refreshing..." : "Browse Host Repos"}
+          </button>
         </div>
+        {remoteRepos.length > 0 && (
+          <div className="repo-picker-row" style={{ marginTop: "8px" }}>
+            <select
+              className="settings-field-input"
+              value=""
+              onChange={(e) => {
+                const nextPath = e.target.value;
+                if (nextPath) setRemoteInput(nextPath);
+              }}
+              disabled={isLoading || loadingRemoteRepos}
+            >
+              <option value="">Select discovered host repo…</option>
+              {remoteRepos.map((repo) => (
+                <option key={repo.path} value={repo.path}>
+                  {repo.name} — {repo.path}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {remoteRepoError && (
+          <p className="muted" style={{ marginTop: "8px" }}>
+            {remoteRepoError}
+          </p>
+        )}
       </section>
     );
   }

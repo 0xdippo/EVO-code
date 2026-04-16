@@ -1,7 +1,7 @@
 /**
  * transport.ts — single entry point for all backend communication.
  *
- * Standalone / Host mode: proxies directly to Tauri IPC (tauri.ts).
+ * Standalone mode: proxies directly to Tauri IPC (tauri.ts).
  * Remote mode: routes invoke() calls to HTTP POST and listen() calls
  * to a shared WebSocket connection on the host machine.
  */
@@ -23,6 +23,7 @@ import type {
   ReviewDecision,
   RunOutputEvent,
   RunStatusEvent,
+  SharedRepository,
   SetupFormValues,
   TrackedFilePath,
 } from "../types/harness";
@@ -31,30 +32,36 @@ import type {
 // Config
 // ---------------------------------------------------------------------------
 
-export type AppMode = "standalone" | "host" | "remote";
+export type AppMode = "standalone" | "remote";
 
 export interface RemoteConfig {
   mode: AppMode;
   serverUrl: string; // e.g. "192.168.1.5:7700" or "mac-studio.tail1234.ts.net:7700"
-  apiKey: string;
+  serviceToken: string;
 }
 
 const MODE_KEY = "evo_mode";
 const URL_KEY = "evo_server_url";
-const KEY_KEY = "evo_api_key";
+const TOKEN_KEY = "evo_service_token";
 
 export function loadRemoteConfig(): RemoteConfig {
+  const storedMode = window.localStorage.getItem(MODE_KEY);
+  const mode: AppMode = storedMode === "remote" ? "remote" : "standalone";
+  if (storedMode !== mode) {
+    window.localStorage.setItem(MODE_KEY, mode);
+  }
+
   return {
-    mode: (window.localStorage.getItem(MODE_KEY) as AppMode) ?? "standalone",
+    mode,
     serverUrl: window.localStorage.getItem(URL_KEY) ?? "",
-    apiKey: window.localStorage.getItem(KEY_KEY) ?? "",
+    serviceToken: window.localStorage.getItem(TOKEN_KEY) ?? "",
   };
 }
 
 export function saveRemoteConfig(config: RemoteConfig): void {
   window.localStorage.setItem(MODE_KEY, config.mode);
   window.localStorage.setItem(URL_KEY, config.serverUrl);
-  window.localStorage.setItem(KEY_KEY, config.apiKey);
+  window.localStorage.setItem(TOKEN_KEY, config.serviceToken);
   // Reset the WebSocket so it reconnects with the new config on next listen()
   closeRemoteWs();
 }
@@ -66,29 +73,29 @@ export function saveRemoteConfig(config: RemoteConfig): void {
 async function remoteInvoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
   const config = loadRemoteConfig();
   const serverUrl = config.serverUrl.trim().replace(/\/+$/, "");
-  const apiKey = config.apiKey.trim();
+  const serviceToken = config.serviceToken.trim();
   if (!serverUrl) {
     throw new Error("Remote Host URL is required in Settings.");
   }
-  if (!apiKey) {
-    throw new Error("Remote API key is required in Settings.");
+  if (!serviceToken) {
+    throw new Error("Remote service token is required in Settings.");
   }
 
   const base = serverUrl.startsWith("http") ? serverUrl : `http://${serverUrl}`;
   let response: Response;
   try {
     response = await fetch(`${base}/api/${command}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-    },
-    body: JSON.stringify(args),
-  });
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceToken}`,
+      },
+      body: JSON.stringify(args),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown network error.";
     throw new Error(
-      `Could not reach remote host "${serverUrl}". Check Host URL/API key formatting and connectivity. (${message})`,
+      `Could not reach remote host "${serverUrl}". Check Host URL/token formatting and connectivity. (${message})`,
     );
   }
 
@@ -115,15 +122,15 @@ function getRemoteWs(): WebSocket {
 
   const config = loadRemoteConfig();
   const serverUrl = config.serverUrl.trim().replace(/\/+$/, "");
-  const apiKey = config.apiKey.trim();
-  if (!serverUrl || !apiKey) {
-    throw new Error("Remote Host URL and API key are required in Settings.");
+  const serviceToken = config.serviceToken.trim();
+  if (!serverUrl || !serviceToken) {
+    throw new Error("Remote Host URL and service token are required in Settings.");
   }
 
   const host = serverUrl.replace(/^https?:\/\//, "");
   let ws: WebSocket;
   try {
-    ws = new WebSocket(`ws://${host}/ws?key=${encodeURIComponent(apiKey)}`);
+    ws = new WebSocket(`ws://${host}/ws?token=${encodeURIComponent(serviceToken)}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown WebSocket error.";
     throw new Error(
@@ -188,9 +195,15 @@ export type {
   ReviewDecision,
   RunOutputEvent,
   RunStatusEvent,
+  SharedRepository,
   SetupFormValues,
   TrackedFilePath,
 } from "../types/harness";
+
+export async function listSharedRepositories(): Promise<SharedRepository[]> {
+  if (!isRemote()) return [];
+  return remoteInvoke<SharedRepository[]>("list_shared_repositories", {});
+}
 
 export async function openRepository(rootPath: string): Promise<RepoSnapshot> {
   if (!isRemote()) return local.openRepository(rootPath);
