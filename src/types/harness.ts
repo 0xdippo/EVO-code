@@ -4,6 +4,7 @@ export const TRACKED_FILES = [
   "TOOLS.md",
   "CHECKLISTS.md",
   "TASKS.md",
+  "README.md",
   "ops/project.json",
   "ops/state.json",
 ] as const;

@@ -25,6 +25,13 @@ pnpm-debug.log*
 # Private notes
 ROADMAP.md
 
+# HARNESS project setup files (keep local when generated)
+PROJECT.md
+AGENTS.md
+TOOLS.md
+CHECKLISTS.md
+TASKS.md
+
 # Secrets
 .env
 .env.*

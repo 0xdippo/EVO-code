@@ -9,6 +9,29 @@ interface RepoRulesPanelProps {
   onSave: SaveRepositoryFile;
 }
 
+function missingFileHint(path: TrackedFilePath): string {
+  switch (path) {
+    case "PROJECT.md":
+      return "Missing PROJECT.md. Use this to describe project goals, scope, and workflow rules for agents.";
+    case "AGENTS.md":
+      return "Missing AGENTS.md. Use this to define agent roles, baton passing, and review/build ownership.";
+    case "TOOLS.md":
+      return "Missing TOOLS.md. Document available commands/scripts and when each should be used.";
+    case "CHECKLISTS.md":
+      return "Missing CHECKLISTS.md. Add required pre-send/review checklists to gate phase transitions.";
+    case "TASKS.md":
+      return "Missing TASKS.md. Track task IDs, owners, and statuses for the active project phase.";
+    case "README.md":
+      return "Missing README.md. Add a project overview, setup steps, and usage notes for humans.";
+    case "ops/project.json":
+      return "Missing ops/project.json. Saving will create project config and agent routing defaults.";
+    case "ops/state.json":
+      return "Missing ops/state.json. Saving will create runtime state tracking for plan/run progress.";
+    default:
+      return "This file is missing. Saving will create it without overwriting unrelated files.";
+  }
+}
+
 export function RepoRulesPanel({
   snapshot,
   isSaving,
@@ -51,7 +74,7 @@ export function RepoRulesPanel({
         className="editor"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder="This file is missing. Saving will create it without overwriting unrelated files."
+        placeholder={missingFileHint(selectedPath)}
         disabled={!isEditable(file)}
       />
 

@@ -29,12 +29,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
-const TRACKED_FILES: [&str; 7] = [
+const TRACKED_FILES: [&str; 8] = [
     "PROJECT.md",
     "AGENTS.md",
     "TOOLS.md",
     "CHECKLISTS.md",
     "TASKS.md",
+    "README.md",
     "ops/project.json",
     "ops/state.json",
 ];
